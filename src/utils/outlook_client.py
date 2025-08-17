@@ -156,162 +156,170 @@ class OutlookClient:
     
     def _search_mailbox_comprehensive(self, inbox_folder, search_text: str,
                                       mailbox_type: str, max_results: int) -> List[Dict[str, Any]]:
-        """Two-pass search strategy: first subject (fast), then body if needed."""
+        """Optimized search using Outlook's SQL filters for better performance."""
         emails = []
         found_ids = set()  # Track found emails to avoid duplicates
         
-        try:
-            # PASS 1: Search in SUBJECT first (fastest)
-            subject_filter = f"@SQL=\"urn:schemas:httpmail:subject\" LIKE '%{search_text}%'"
-            logger.info(f"Pass 1: Searching {mailbox_type} mailbox subjects for '{search_text}'")
+        # Escape special characters for SQL
+        search_text_escaped = search_text.replace("'", "''").replace('"', '""')
+        
+        items = inbox_folder.Items
+        items.Sort("[ReceivedTime]", True)
+        
+        # Build optimized filters to try in order of performance
+        filters_to_try = [
+            # 1. Subject search (fastest - always indexed)
+            (f"@SQL=\"urn:schemas:httpmail:subject\" LIKE '%{search_text_escaped}%'", "subject"),
             
-            items = inbox_folder.Items
-            items.Sort("[ReceivedTime]", True)
+            # 2. Try combined subject OR body with message body property
+            (f"@SQL=\"urn:schemas:httpmail:subject\" LIKE '%{search_text_escaped}%' OR "
+             f"\"http://schemas.microsoft.com/mapi/proptag/0x1000001E\" LIKE '%{search_text_escaped}%'", "subject_or_body"),
             
-            # Search subjects
+            # 3. Try text description (often faster than full body)
+            (f"@SQL=\"urn:schemas:httpmail:textdescription\" LIKE '%{search_text_escaped}%'", "text_description"),
+        ]
+        
+        for filter_sql, filter_type in filters_to_try:
             try:
-                subject_items = items.Restrict(subject_filter)
-                logger.info(f"Found {subject_items.Count} matches in subjects")
+                logger.info(f"Trying {filter_type} filter for '{search_text}'")
+                filtered_items = items.Restrict(filter_sql)
+                count = filtered_items.Count
                 
-                # Process subject matches
-                for item in subject_items:
-                    if len(emails) >= max_results:
-                        break
-                    try:
-                        entry_id = getattr(item, 'EntryID', '')
-                        if entry_id and entry_id not in found_ids:
-                            email_data = self._extract_email_data(
-                                item, inbox_folder.Name, mailbox_type
-                            )
-                            if email_data:
-                                emails.append(email_data)
-                                found_ids.add(entry_id)
-                    except Exception as e:
-                        logger.debug(f"Error processing email: {e}")
-                        continue
-                        
-            except Exception as e:
-                logger.warning(f"Subject search failed: {e}")
-            
-            # PASS 2: Search in BODY if we need more results
-            if len(emails) < max_results:
-                logger.info(f"Pass 2: Searching email bodies for additional matches")
-                
-                # Try fast content search first (if Windows Search is available)
-                body_found = False
-                try:
-                    # Attempt 1: Use content indexing (fastest if available)
-                    content_filter = f'@SQL="urn:schemas:fulltext:content" LIKE \'%{search_text}%\''
-                    content_items = items.Restrict(content_filter)
-                    logger.info(f"Content index search found {content_items.Count} potential matches")
+                if count > 0:
+                    logger.info(f"Found {count} potential matches using {filter_type} filter")
                     
-                    for item in content_items:
+                    for item in filtered_items:
                         if len(emails) >= max_results:
                             break
-                        entry_id = getattr(item, 'EntryID', '')
-                        if entry_id and entry_id not in found_ids:
-                            # Verify it's actually in body, not just subject
-                            subject = getattr(item, 'Subject', '').lower()
-                            if search_text.lower() not in subject:
-                                email_data = self._extract_email_data(
-                                    item, inbox_folder.Name, mailbox_type
-                                )
-                                if email_data:
-                                    emails.append(email_data)
-                                    found_ids.add(entry_id)
-                                    body_found = True
-                except Exception as e:
-                    logger.info(f"Content index search not available: {e}")
-                
-                # Fallback: Progressive date-based search if content search didn't work
-                if not body_found and len(emails) < max_results:
-                    # Progressive date ranges: start recent, expand if needed
-                    # Days to search: 1 week, 2 weeks, 1 month, 3 months, 6 months, 1 year
-                    date_ranges = [7, 14, 30, 90, 180, 365]
-                    
-                    # Get max retention from config
-                    max_retention_days = config.get_int(
-                        f'{mailbox_type}_retention_months',
-                        config.get_int('personal_retention_months', 6) if mailbox_type == 'personal' else config.get_int('shared_retention_months', 12)
-                    ) * 30
-                    
-                    search_lower = search_text.lower()
-                    total_checked = 0
-                    
-                    for days in date_ranges:
-                        if len(emails) >= max_results:
-                            break
-                        
-                        # Don't search beyond retention period
-                        if days > max_retention_days:
-                            days = max_retention_days
-                        
-                        # Calculate date range
-                        from datetime import timedelta
-                        start_date = datetime.now() - timedelta(days=days)
-                        end_date = datetime.now() - timedelta(days=date_ranges[date_ranges.index(days)-1] if date_ranges.index(days) > 0 else 0)
-                        
-                        # Build date filter for this range
-                        if date_ranges.index(days) == 0:
-                            # First range: just last N days
-                            date_filter = f"[ReceivedTime] >= '{start_date.strftime('%m/%d/%Y')}'"
-                        else:
-                            # Subsequent ranges: between dates to avoid re-checking
-                            date_filter = f"[ReceivedTime] >= '{start_date.strftime('%m/%d/%Y')}' AND [ReceivedTime] < '{end_date.strftime('%m/%d/%Y')}'"
                         
                         try:
-                            filtered_items = items.Restrict(date_filter)
-                            range_count = filtered_items.Count
-                            
-                            if range_count == 0:
-                                continue
-                            
-                            logger.info(f"Searching {range_count} emails from last {days} days")
-                            
-                            # Sort by date (newest first)
-                            filtered_items.Sort("[ReceivedTime]", True)
-                            
-                            items_checked = 0
-                            # Check ALL items in this date range (up to a reasonable limit)
-                            max_per_range = min(range_count, 2000)  # Safety limit per range
-                            
-                            for item in filtered_items:
-                                if len(emails) >= max_results or items_checked >= max_per_range:
-                                    break
-                                
-                                items_checked += 1
-                                total_checked += 1
-                                
-                                try:
-                                    entry_id = getattr(item, 'EntryID', '')
-                                    if entry_id and entry_id not in found_ids:
-                                        # Quick subject check first
-                                        subject = getattr(item, 'Subject', '').lower()
-                                        if search_lower not in subject:  # Only check body if not in subject
-                                            body = getattr(item, 'Body', '').lower()
-                                            if search_lower in body:
-                                                email_data = self._extract_email_data(
-                                                    item, inbox_folder.Name, mailbox_type
-                                                )
-                                                if email_data:
-                                                    emails.append(email_data)
-                                                    found_ids.add(entry_id)
-                                except Exception as e:
-                                    logger.debug(f"Error checking email body: {e}")
-                                    continue
-                            
-                            logger.info(f"Checked {items_checked} items in {days}-day range, found {len(emails)} total matches")
-                            
-                            # If we found matches, maybe we don't need to search older emails
-                            if len(emails) >= max_results * 0.5:  # Found at least 50% of what we need
-                                logger.info(f"Found sufficient matches, stopping search")
-                                break
-                                
+                            entry_id = getattr(item, 'EntryID', '')
+                            if entry_id and entry_id not in found_ids:
+                                # For subject-only filter, verify the match
+                                if filter_type == "subject":
+                                    # Already matched in subject, just add it
+                                    email_data = self._extract_email_data(
+                                        item, inbox_folder.Name, mailbox_type
+                                    )
+                                    if email_data:
+                                        emails.append(email_data)
+                                        found_ids.add(entry_id)
+                                else:
+                                    # For body filters, verify it's actually in the content
+                                    search_lower = search_text.lower()
+                                    subject = getattr(item, 'Subject', '').lower()
+                                    body = getattr(item, 'Body', '').lower()
+                                    
+                                    if search_lower in subject or search_lower in body:
+                                        email_data = self._extract_email_data(
+                                            item, inbox_folder.Name, mailbox_type
+                                        )
+                                        if email_data:
+                                            emails.append(email_data)
+                                            found_ids.add(entry_id)
                         except Exception as e:
-                            logger.warning(f"Date filter for {days} days failed: {e}")
+                            logger.debug(f"Error processing item: {e}")
                             continue
                     
-                    logger.info(f"Progressive search checked {total_checked} items total, found {len(emails)} matches")
+                    # If we got good results from this filter, we can stop
+                    if len(emails) >= max_results * 0.5:  # Got at least 50% of what we need
+                        logger.info(f"Got sufficient results from {filter_type} filter")
+                        break
+                        
+            except Exception as e:
+                logger.debug(f"Filter {filter_type} failed: {e}")
+                continue
+        
+        # If we still need more results and no filter worked well, fall back to date-based search
+        if len(emails) < max_results:
+            logger.info(f"Need more results, using date-based search fallback")
+            # Use smaller date ranges for faster performance
+            date_ranges = [7, 30, 90, 180]  # Simplified ranges
+            
+            # Get max retention from config
+            max_retention_days = config.get_int(
+                f'{mailbox_type}_retention_months',
+                config.get_int('personal_retention_months', 6) if mailbox_type == 'personal' else config.get_int('shared_retention_months', 12)
+            ) * 30
+            
+            search_lower = search_text.lower()
+            total_checked = 0
+            
+            for days in date_ranges:
+                if len(emails) >= max_results:
+                    break
+                
+                # Don't search beyond retention period
+                if days > max_retention_days:
+                    days = max_retention_days
+                
+                # Calculate date range
+                from datetime import timedelta
+                start_date = datetime.now() - timedelta(days=days)
+                end_date = datetime.now() - timedelta(days=date_ranges[date_ranges.index(days)-1] if date_ranges.index(days) > 0 else 0)
+                
+                # Build date filter for this range
+                if date_ranges.index(days) == 0:
+                    # First range: just last N days
+                    date_filter = f"[ReceivedTime] >= '{start_date.strftime('%m/%d/%Y')}'"
+                else:
+                    # Subsequent ranges: between dates to avoid re-checking
+                    date_filter = f"[ReceivedTime] >= '{start_date.strftime('%m/%d/%Y')}' AND [ReceivedTime] < '{end_date.strftime('%m/%d/%Y')}'"
+                
+                try:
+                    filtered_items = items.Restrict(date_filter)
+                    range_count = filtered_items.Count
+                    
+                    if range_count == 0:
+                        continue
+                    
+                    logger.info(f"Searching {range_count} emails from last {days} days")
+                    
+                    # Sort by date (newest first)
+                    filtered_items.Sort("[ReceivedTime]", True)
+                    
+                    items_checked = 0
+                    # Limit checks per range for better performance
+                    max_per_range = min(range_count, 500)  # Reduced limit for faster response
+                    
+                    for item in filtered_items:
+                        if len(emails) >= max_results or items_checked >= max_per_range:
+                            break
+                        
+                        items_checked += 1
+                        total_checked += 1
+                        
+                        try:
+                            entry_id = getattr(item, 'EntryID', '')
+                            if entry_id and entry_id not in found_ids:
+                                # Quick subject check first
+                                subject = getattr(item, 'Subject', '').lower()
+                                body = getattr(item, 'Body', '').lower()
+                                
+                                # Check if search text is in subject or body
+                                if search_lower in subject or search_lower in body:
+                                    email_data = self._extract_email_data(
+                                        item, inbox_folder.Name, mailbox_type
+                                    )
+                                    if email_data:
+                                        emails.append(email_data)
+                                        found_ids.add(entry_id)
+                        except Exception as e:
+                            logger.debug(f"Error checking email: {e}")
+                            continue
+                    
+                    logger.info(f"Checked {items_checked} items in {days}-day range, found {len(emails)} total matches")
+                    
+                    # If we found enough matches, stop searching
+                    if len(emails) >= max_results * 0.7:  # Found at least 70% of what we need
+                        logger.info(f"Found sufficient matches, stopping search")
+                        break
+                        
+                except Exception as e:
+                    logger.warning(f"Date filter for {days} days failed: {e}")
+                    continue
+            
+            logger.info(f"Date-based search checked {total_checked} items total, found {len(emails)} matches")
             
             # Search other folders if enabled and we need more results
             if len(emails) < max_results and config.get_bool('search_all_folders', True):

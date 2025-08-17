@@ -157,10 +157,10 @@ The server implements a sophisticated multi-stage search approach:
 - Uses Outlook's indexed search on subject lines
 - Most efficient for finding emails by subject
 
-### 2. Content Index Search
-- Attempts to use Windows Search for full-text search
-- Near-instant results when available
-- Requires Windows Search service to be running
+### 2. Optimized Body Search
+- Uses multiple Outlook SQL filters for body searching
+- Tries different property schemas for best compatibility
+- Falls back to date-based search if needed
 
 ### 3. Progressive Date-Based Search
 - Searches in expanding time windows:
@@ -186,10 +186,10 @@ The server implements a sophisticated multi-stage search approach:
 ### Optimization Tips
 
 1. **Use Specific Search Terms**: More specific phrases yield faster, more accurate results
-2. **Enable Windows Search**: Ensures content indexing is available for fastest full-text search
-3. **Adjust Time Windows**: Configure retention periods to match your actual email retention
-4. **Limit Results**: Set reasonable `max_search_results` to improve response times
-5. **Configure Body Limits**: Use `max_body_chars` if full email bodies aren't needed
+2. **Adjust Time Windows**: Configure retention periods to match your actual email retention
+3. **Limit Results**: Set reasonable `max_search_results` to improve response times
+4. **Configure Body Limits**: Use `max_body_chars` if full email bodies aren't needed
+5. **Keep Outlook Updated**: Newer versions have better search performance
 
 ### Caching
 
@@ -246,14 +246,14 @@ client.connect_stdio(["python", "outlook_mcp.py"])
 **Search Returns No Results**
 - Verify emails exist matching your search criteria
 - Try broader search terms
-- Check if Windows Search service is running for content indexing
 - Increase `max_search_results` if needed
+- Check that Outlook has finished indexing your mailbox
 
 **Slow Search Performance**
-- Enable Windows Search for content indexing
 - Use more specific search terms
 - Reduce `max_search_results`
 - Consider limiting search to specific mailboxes
+- Ensure Outlook is not syncing or downloading messages
 
 ### Debug Mode
 
