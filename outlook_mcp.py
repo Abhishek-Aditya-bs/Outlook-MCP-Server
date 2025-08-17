@@ -22,21 +22,7 @@ from mcp.server.stdio import stdio_server
 
 try:
     from src.config.config_reader import config
-    
-    # Use optimized client if available and configured
-    use_optimized = config.get_bool('use_optimized_client', True)
-    
-    if use_optimized:
-        try:
-            from src.utils.outlook_client_optimized import outlook_client_optimized as outlook_client
-            print("[INFO] Using optimized Outlook client for better performance")
-        except ImportError:
-            from src.utils.outlook_client import outlook_client
-            print("[INFO] Using standard Outlook client")
-    else:
-        from src.utils.outlook_client import outlook_client
-        print("[INFO] Using standard Outlook client (optimized client disabled)")
-    
+    from src.utils.outlook_client import outlook_client
     from src.utils.email_formatter import format_mailbox_status, format_email_chain, format_alert_analysis
 except ImportError as e:
     print(f"[ERROR] Import Error: {e}")
@@ -68,13 +54,13 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="get_email_chain",
-            description="Get email chain by subject pattern. Searches ALL folders in both personal and shared mailboxes (entire available mailbox like Outlook native search)",
+            description="Retrieves complete email chains with full email bodies for summarization. Searches ALL folders in both personal and shared mailboxes. Returns full email content including sender, recipients, timestamps, and complete message bodies for AI to analyze and summarize the conversation thread.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "subject": {
                         "type": "string",
-                        "description": "Subject pattern to search for"
+                        "description": "Subject pattern to search for in email chains"
                     },
                     "include_personal": {
                         "type": "boolean",
@@ -92,13 +78,13 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="analyze_alerts",
-            description="Analyze production alerts across mailboxes. Searches entire available mailbox like Outlook native search. Finds alert patterns and provides recommendations",
+            description="Analyzes production alerts with full email content for comprehensive understanding. Retrieves complete alert emails including bodies, analyzes patterns, identifies previous responses and resolutions, and provides actionable recommendations based on historical alert handling. Returns full context for accurate alert analysis.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "alert_pattern": {
                         "type": "string",
-                        "description": "Alert pattern or identifier to search for"
+                        "description": "Alert pattern, error message, or identifier to analyze"
                     },
                     "include_personal": {
                         "type": "boolean",
