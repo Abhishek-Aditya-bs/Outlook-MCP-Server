@@ -4,11 +4,11 @@ A simplified Model Context Protocol (MCP) server for Microsoft Outlook integrati
 
 ## Features
 
-✅ **Simple Setup** - Just 5 files, easy configuration  
-✅ **Three Tools** - Access, email chains, and alert analysis  
-✅ **All Folders** - Searches entire mailbox, not just Inbox  
-✅ **Dual Mailbox** - Personal and shared mailbox support  
-✅ **AI Ready** - Structured responses for AI analysis  
+**Simple Setup** - Just 5 files, easy configuration  
+**Three Tools** - Access, email chains, and alert analysis  
+**All Folders** - Searches entire mailbox, not just Inbox  
+**Dual Mailbox** - Personal and shared mailbox support  
+**AI Ready** - Structured responses for AI analysis
 
 ## Quick Start
 
@@ -189,30 +189,30 @@ Add to your MCP configuration:
 ## Troubleshooting
 
 ### "Failed to connect to Outlook"
-- ✅ Start Microsoft Outlook
-- ✅ Log in to your account  
-- ✅ Grant permission when dialog appears
+- Start Microsoft Outlook
+- Log in to your account  
+- Grant permission when dialog appears
 
 ### "Still getting security prompts frequently"
-- ✅ Ensure `use_extended_mapi_login=true` in src/config/config.properties
-- ✅ Try granting longer access duration (e.g., 10 minutes instead of 1 minute)
-- ✅ Note: Complete elimination of prompts is not guaranteed due to Outlook security
+- Ensure `use_extended_mapi_login=true` in src/config/config.properties
+- Try granting longer access duration (e.g., 10 minutes instead of 1 minute)
+- Note: Complete elimination of prompts is not guaranteed due to Outlook security
 
 ### "Shared mailbox not accessible"
-- ✅ Update `shared_mailbox_email` in src/config/config.properties
-- ✅ Ensure you have delegate access rights
-- ✅ Add shared mailbox to your Outlook profile
+- Update `shared_mailbox_email` in src/config/config.properties
+- Ensure you have delegate access rights
+- Add shared mailbox to your Outlook profile
 
 ### "No emails found"
-- ✅ Check search terms are correct
-- ✅ Verify emails exist in date range
-- ✅ Try broader search patterns
-- ✅ Check retention policy settings
+- Check search terms are correct
+- Verify emails exist in date range
+- Try broader search patterns
+- Check retention policy settings
 
 ### Performance Issues  
-- ✅ Lower `max_search_results` in config
-- ✅ Set `search_all_folders=false` to search only Inbox
-- ✅ Set `max_body_chars=2000` to limit email body size
+- Lower `max_search_results` in config
+- Set `search_all_folders=false` to search only Inbox
+- Set `max_body_chars=2000` to limit email body size
 
 ## Development
 

@@ -19,11 +19,11 @@ def access_shared_mailbox():
             shared_mailbox.Resolve()
             
             if shared_mailbox.Resolved:
-                print(f"✅ Found shared mailbox: {shared_email}")
+                print(f"[OK] Found shared mailbox: {shared_email}")
                 
                 # Get the shared mailbox inbox
                 shared_inbox = namespace.GetSharedDefaultFolder(shared_mailbox, 6)  # 6 = Inbox
-                print(f"📧 Shared inbox accessed: {shared_inbox.Name}")
+                print(f"[INFO] Shared inbox accessed: {shared_inbox.Name}")
                 
                 # Get today's emails
                 today_emails = get_todays_emails(shared_inbox)
@@ -46,7 +46,7 @@ def access_through_stores(namespace, shared_email):
     """
     try:
         stores = namespace.Stores
-        print(f"\n📁 Available Stores ({stores.Count}):")
+        print(f"\n[STORES] Available Stores ({stores.Count}):")
         
         for i in range(1, stores.Count + 1):
             store = stores[i]
@@ -54,7 +54,7 @@ def access_through_stores(namespace, shared_email):
             
             # Check if this is the shared mailbox we want
             if "accessfx" in store.DisplayName.lower() or "escalation" in store.DisplayName.lower():
-                print(f"✅ Found shared mailbox store: {store.DisplayName}")
+                print(f"[OK] Found shared mailbox store: {store.DisplayName}")
                 
                 # Get inbox from this store
                 root_folder = store.GetRootFolder()
@@ -76,7 +76,7 @@ def get_todays_emails(inbox):
     try:
         # Get today's date (timezone-naive)
         today = datetime.now().date()
-        print(f"🔍 Searching for emails from {today}...")
+        print(f"[SEARCH] Searching for emails from {today}...")
         
         # Get messages
         messages = inbox.Items
@@ -123,7 +123,7 @@ def get_todays_emails(inbox):
                 print(f"Error processing message {i}: {e}")
                 continue
         
-        print(f"📊 Found {len(today_emails)} emails from today (processed {processed_count} messages)")
+        print(f"[RESULT] Found {len(today_emails)} emails from today (processed {processed_count} messages)")
         return today_emails
         
     except Exception as e:
@@ -138,7 +138,7 @@ def summarize_issues(emails):
         print("No emails to summarize")
         return
     
-    print(f"\n📋 TODAY'S EMAIL SUMMARY ({len(emails)} emails)")
+    print(f"\n[SUMMARY] TODAY'S EMAIL SUMMARY ({len(emails)} emails)")
     print("=" * 60)
     
     # Enhanced keywords for better classification
@@ -167,7 +167,7 @@ def summarize_issues(emails):
     
     # Print urgent emails
     if urgent_emails:
-        print(f"\n🚨 URGENT/CRITICAL EMAILS ({len(urgent_emails)}):")
+        print(f"\n[URGENT] URGENT/CRITICAL EMAILS ({len(urgent_emails)}):")
         for i, email in enumerate(urgent_emails, 1):
             print(f"{i}. Subject: {email['subject']}")
             print(f"   From: {email['sender']}")
@@ -178,18 +178,18 @@ def summarize_issues(emails):
     
     # Print warning emails (top 3)
     if warning_emails:
-        print(f"\n⚠️  WARNING EMAILS ({len(warning_emails)}) - Showing top 3:")
+        print(f"\n[WARNING] WARNING EMAILS ({len(warning_emails)}) - Showing top 3:")
         for i, email in enumerate(warning_emails[:3], 1):
             print(f"{i}. {email['subject'][:60]}...")
             print(f"   From: {email['sender']}")
             print(f"   Time: {email['received_time']}")
     
     # Print summary stats
-    print(f"\n📈 SUMMARY STATS:")
+    print(f"\n[STATS] SUMMARY STATS:")
     print(f"   Total Emails: {len(emails)}")
-    print(f"   🚨 Urgent/Critical: {len(urgent_emails)}")
-    print(f"   ⚠️  Warnings: {len(warning_emails)}")
-    print(f"   📋 Normal: {len(normal_emails)}")
+    print(f"   Urgent/Critical: {len(urgent_emails)}")
+    print(f"   Warnings: {len(warning_emails)}")
+    print(f"   Normal: {len(normal_emails)}")
     
     # Top senders
     senders = {}
@@ -197,7 +197,7 @@ def summarize_issues(emails):
         sender = email['sender']
         senders[sender] = senders.get(sender, 0) + 1
     
-    print(f"\n👥 TOP SENDERS TODAY:")
+    print(f"\n[SENDERS] TOP SENDERS TODAY:")
     for sender, count in sorted(senders.items(), key=lambda x: x[1], reverse=True)[:5]:
         print(f"   {sender}: {count} emails")
     
@@ -206,7 +206,7 @@ def summarize_issues(emails):
     emails_with_attachments = sum(1 for email in emails if email['attachments'] > 0)
     
     if total_attachments > 0:
-        print(f"\n📎 ATTACHMENTS:")
+        print(f"\n[ATTACHMENTS] ATTACHMENTS:")
         print(f"   Total attachments: {total_attachments}")
         print(f"   Emails with attachments: {emails_with_attachments}")
 
@@ -221,12 +221,12 @@ def get_todays_emails_with_filter(inbox):
         # Use Outlook's Restrict method to filter emails
         filter_criteria = f"[ReceivedTime] >= '{today_str} 12:00 AM' AND [ReceivedTime] < '{datetime.now() + timedelta(days=1):%m/%d/%Y} 12:00 AM'"
         
-        print(f"🔍 Using filter: {filter_criteria}")
+        print(f"[FILTER] Using filter: {filter_criteria}")
         
         messages = inbox.Items
         filtered_messages = messages.Restrict(filter_criteria)
         
-        print(f"📊 Found {filtered_messages.Count} emails from today using filter")
+        print(f"[RESULT] Found {filtered_messages.Count} emails from today using filter")
         
         today_emails = []
         for i in range(1, filtered_messages.Count + 1):
@@ -253,7 +253,7 @@ def get_todays_emails_with_filter(inbox):
 
 # Main execution
 if __name__ == "__main__":
-    print("🚀 Starting Shared Mailbox Access")
+    print("[START] Starting Shared Mailbox Access")
     print("=" * 50)
     
     emails = access_shared_mailbox()
@@ -261,4 +261,4 @@ if __name__ == "__main__":
     if emails:
         summarize_issues(emails)
     else:
-        print("❌ No emails found or unable to access shared mailbox")
+        print("[ERROR] No emails found or unable to access shared mailbox")
