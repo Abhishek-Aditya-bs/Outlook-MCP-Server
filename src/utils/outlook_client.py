@@ -321,8 +321,9 @@ class OutlookClient:
             
             logger.info(f"Date-based search checked {total_checked} items total, found {len(emails)} matches")
             
-            # Search other folders if enabled and we need more results
-            if len(emails) < max_results and config.get_bool('search_all_folders', True):
+        # Search other folders if enabled and we need more results
+        if len(emails) < max_results and config.get_bool('search_all_folders', True):
+            try:
                 additional_emails = self._search_other_folders(
                     inbox_folder.Parent,
                     search_text,
@@ -331,9 +332,8 @@ class OutlookClient:
                     found_ids
                 )
                 emails.extend(additional_emails)
-            
-        except Exception as e:
-            logger.error(f"Error in search: {e}")
+            except Exception as e:
+                logger.error(f"Error searching other folders: {e}")
         
         return emails
     
