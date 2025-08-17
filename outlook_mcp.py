@@ -2,15 +2,34 @@
 
 import asyncio
 import logging
+import platform
+import sys
 from typing import Any, Sequence
+
+# Check if running on Windows
+if platform.system() != 'Windows':
+    print("❌ Error: Outlook MCP Server requires Windows with Microsoft Outlook installed")
+    print(f"   Current platform: {platform.system()}")
+    print("\n📋 To use this server:")
+    print("   1. Run on a Windows machine with Outlook installed")
+    print("   2. Or use a Windows virtual machine")
+    print("   3. Or access a remote Windows desktop")
+    sys.exit(1)
 
 from mcp import server, types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
-from src.config.config_reader import config
-from src.utils.outlook_client import outlook_client
-from src.utils.email_formatter import format_mailbox_status, format_email_chain, format_alert_analysis
+try:
+    from src.config.config_reader import config
+    from src.utils.outlook_client import outlook_client
+    from src.utils.email_formatter import format_mailbox_status, format_email_chain, format_alert_analysis
+except ImportError as e:
+    print(f"❌ Import Error: {e}")
+    print("\n📋 Please install required dependencies:")
+    print("   pip install -r requirements.txt")
+    print("\nNote: pywin32 is required and only works on Windows")
+    sys.exit(1)
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

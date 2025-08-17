@@ -3,14 +3,32 @@
 import asyncio
 import sys
 import os
+import platform
 
-# Add src directory to path for imports
-src_path = os.path.join(os.path.dirname(__file__), '..', 'src')
-sys.path.insert(0, src_path)
+# Check if running on Windows
+if platform.system() != 'Windows':
+    print("❌ Error: Outlook MCP Server requires Windows with Microsoft Outlook installed")
+    print(f"   Current platform: {platform.system()}")
+    print("\n📋 To use this server:")
+    print("   1. Run on a Windows machine with Outlook installed")
+    print("   2. Or use a Windows virtual machine")
+    print("   3. Or access a remote Windows desktop")
+    sys.exit(1)
 
-from utils.outlook_client import outlook_client
-from config.config_reader import config
-from utils.email_formatter import format_mailbox_status, format_email_chain
+# Add parent directory to path for imports
+parent_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, parent_path)
+
+try:
+    from src.utils.outlook_client import outlook_client
+    from src.config.config_reader import config
+    from src.utils.email_formatter import format_mailbox_status, format_email_chain
+except ImportError as e:
+    print(f"❌ Import Error: {e}")
+    print("\n📋 Please install required dependencies:")
+    print("   pip install -r requirements.txt")
+    print("\nNote: pywin32 is required and only works on Windows")
+    sys.exit(1)
 
 
 async def test_connection():
