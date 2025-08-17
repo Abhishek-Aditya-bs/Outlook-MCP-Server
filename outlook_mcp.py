@@ -8,9 +8,9 @@ from typing import Any, Sequence
 
 # Check if running on Windows
 if platform.system() != 'Windows':
-    print("❌ Error: Outlook MCP Server requires Windows with Microsoft Outlook installed")
+    print("[ERROR] Outlook MCP Server requires Windows with Microsoft Outlook installed")
     print(f"   Current platform: {platform.system()}")
-    print("\n📋 To use this server:")
+    print("\n[INFO] To use this server:")
     print("   1. Run on a Windows machine with Outlook installed")
     print("   2. Or use a Windows virtual machine")
     print("   3. Or access a remote Windows desktop")
@@ -25,8 +25,8 @@ try:
     from src.utils.outlook_client import outlook_client
     from src.utils.email_formatter import format_mailbox_status, format_email_chain, format_alert_analysis
 except ImportError as e:
-    print(f"❌ Import Error: {e}")
-    print("\n📋 Please install required dependencies:")
+    print(f"[ERROR] Import Error: {e}")
+    print("\n[INFO] Please install required dependencies:")
     print("   pip install -r requirements.txt")
     print("\nNote: pywin32 is required and only works on Windows")
     sys.exit(1)
@@ -267,30 +267,30 @@ async def read_resource(uri: str) -> str:
 async def main():
     """Main entry point."""
     print("=" * 60)
-    print("🚀 Starting Outlook MCP Server")
+    print("[STARTING] Outlook MCP Server")
     print("=" * 60)
     
     # Show configuration
     config.show_config()
     
     # Important notes
-    print("\n📋 Important Notes:")
-    print("   • Make sure Microsoft Outlook is running")
-    print("   • Grant permission when security dialog appears")  
-    print("   • Update config.properties with your shared mailbox details")
-    print("   • Server searches ALL folders, not just Inbox")
+    print("\n[INFO] Important Notes:")
+    print("   * Make sure Microsoft Outlook is running")
+    print("   * Grant permission when security dialog appears")  
+    print("   * Update config.properties with your shared mailbox details")
+    print("   * Server searches ALL folders, not just Inbox")
     
     shared_email = config.get('shared_mailbox_email')
     if not shared_email or shared_email == 'your-shared-mailbox@company.com':
-        print("\n⚠️  Warning: Shared mailbox not configured!")
+        print("\n[WARNING] Shared mailbox not configured!")
         print("   Update 'shared_mailbox_email' in config.properties")
     
-    print("\n🔧 Available Tools:")
+    print("\n[TOOLS] Available Tools:")
     print("   1. check_mailbox_access - Test connection and access")
     print("   2. get_email_chain - Find email conversations by subject")
     print("   3. analyze_alerts - Analyze production alerts and patterns")
     
-    print(f"\n✅ Server ready! Listening for MCP client connections...")
+    print(f"\n[READY] Server ready! Listening for MCP client connections...")
     print("=" * 60)
     
     # Start server
@@ -302,7 +302,7 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n👋 Server stopped by user")
+        print("\n[INFO] Server stopped by user")
     except Exception as e:
-        print(f"\n❌ Server error: {e}")
+        print(f"\n[ERROR] Server error: {e}")
         logger.error(f"Server error: {e}")
