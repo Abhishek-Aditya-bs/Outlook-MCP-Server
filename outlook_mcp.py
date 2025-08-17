@@ -214,7 +214,7 @@ async def main():
     print("   * Server searches ALL folders, not just Inbox")
     
     shared_email = config.get('shared_mailbox_email')
-    if not shared_email or shared_email == 'your-shared-mailbox@company.com':
+    if not shared_email or 'your-shared-mailbox' in shared_email or 'example.com' in shared_email:
         print("\n[WARNING] Shared mailbox not configured!")
         print("   Update 'shared_mailbox_email' in config.properties")
     

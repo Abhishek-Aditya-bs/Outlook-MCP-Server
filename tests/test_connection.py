@@ -108,33 +108,34 @@ async def test_connection():
         print(f"   [ERROR] Email search failed: {e}")
         return
     
-    print("\n[3] Testing Alert Analysis...")
+    print("\n[3] Testing Alert Search...")
     print("-" * 30)
     
     try:
-        # Test alert analysis with a simple alert term
+        # Test searching for emails with "alert" in content
         test_pattern = "alert"
         
-        alerts = outlook_client.search_alerts(
-            alert_pattern=test_pattern,
+        alerts = outlook_client.search_emails(
+            search_text=test_pattern,
             include_personal=True,
             include_shared=True
         )
         
-        print(f"   [OK] Alert search completed!")
-        print(f"   [ALERT] Found {len(alerts)} potential alerts for pattern '{test_pattern}'")
+        formatted_result = format_email_chain(alerts, test_pattern)
         
-        if alerts:
-            # Show recent alerts
-            recent_alerts = sorted(alerts, key=lambda x: x.get('received_time', ''), reverse=True)[:3]
-            print(f"   [RECENT] Recent alerts:")
-            for i, alert in enumerate(recent_alerts, 1):
-                subject = alert.get('subject', 'No Subject')
-                sender = alert.get('sender_name', 'Unknown')
-                print(f"      {i}. {subject[:60]}... (from {sender})")
+        if formatted_result["status"] == "success":
+            summary = formatted_result["summary"]
+            print(f"   [OK] Alert search completed!")
+            print(f"   [ALERT] Found {summary['total_emails']} emails containing '{test_pattern}'")
+            
+            if summary["total_emails"] > 0:
+                # Show mailbox distribution
+                print(f"   [DISTRIBUTION] {summary['mailbox_distribution']}")
+        else:
+            print(f"   [INFO] No emails found containing '{test_pattern}'")
         
     except Exception as e:
-        print(f"   [ERROR] Alert analysis failed: {e}")
+        print(f"   [ERROR] Alert search failed: {e}")
         return
     
     print("\n" + "=" * 50)
@@ -145,7 +146,7 @@ async def test_connection():
     print("\n[NEXT STEPS]:")
     print("   1. Start the MCP server: python outlook_mcp.py")
     print("   2. Configure your MCP client to connect to this server")  
-    print("   3. Update config.properties with your organization's details")
+    print("   3. Update config.properties with your mailbox details")
     
     # Configuration reminders
     shared_email = config.get('shared_mailbox_email', '')
