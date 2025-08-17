@@ -88,8 +88,9 @@ class ConfigReader:
             'max_retry_attempts': 3,
             'batch_processing_size': 50,
             'analyze_importance_levels': True,
-            'search_all_folders': True,
+            'search_all_folders': False,
             'use_folder_traversal': False,
+            'use_optimized_client': True,
             'use_extended_mapi_login': True,
             'include_timestamps': True,
             'clean_html_content': True

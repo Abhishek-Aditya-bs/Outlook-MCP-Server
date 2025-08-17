@@ -22,7 +22,21 @@ from mcp.server.stdio import stdio_server
 
 try:
     from src.config.config_reader import config
-    from src.utils.outlook_client import outlook_client
+    
+    # Use optimized client if available and configured
+    use_optimized = config.get_bool('use_optimized_client', True)
+    
+    if use_optimized:
+        try:
+            from src.utils.outlook_client_optimized import outlook_client_optimized as outlook_client
+            print("[INFO] Using optimized Outlook client for better performance")
+        except ImportError:
+            from src.utils.outlook_client import outlook_client
+            print("[INFO] Using standard Outlook client")
+    else:
+        from src.utils.outlook_client import outlook_client
+        print("[INFO] Using standard Outlook client (optimized client disabled)")
+    
     from src.utils.email_formatter import format_mailbox_status, format_email_chain, format_alert_analysis
 except ImportError as e:
     print(f"[ERROR] Import Error: {e}")
