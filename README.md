@@ -7,11 +7,14 @@ A Model Context Protocol (MCP) server that provides programmatic access to Micro
 - **Multi-Mailbox Support**: Access both personal inbox and shared mailboxes simultaneously
 - **Advanced Search Capabilities**: Search emails by exact phrase matching in both subject and body
 - **Near-Instant Search Performance**: Leverages Outlook's AdvancedSearch API for blazing-fast body searches
+- **Parallel Mailbox Search**: Searches personal and shared mailboxes concurrently for faster results
 - **Full Email Content**: Retrieves complete email bodies for comprehensive analysis
 - **Email Chain Analysis**: Groups and analyzes related email conversations
+- **Smart Connection Management**: Automatically connects to existing Outlook instances with retry logic
+- **Optimized Caching**: Time-based cache invalidation with size limits for optimal memory usage
+- **Non-Blocking Operations**: Async execution prevents server blocking during long operations
 - **Configurable Settings**: Fine-tune performance and behavior through configuration file
 - **Cross-Folder Search**: Optionally search across all folders, not just Inbox
-- **Caching Support**: Built-in caching for improved performance on repeated queries
 - **Automatic Fallback**: Gracefully handles indexing issues with alternative search methods
 
 ## Requirements
@@ -69,6 +72,8 @@ The server behavior can be customized through `config.properties`:
 - `max_search_body_chars`: Limit for body searching during pattern matching
 - `connection_timeout_minutes`: Outlook connection timeout
 - `batch_processing_size`: Number of emails to process in batch
+- `max_connection_retries`: Number of connection retry attempts (default: 3)
+- `max_recipients_display`: Maximum recipients to show per email (default: 10)
 
 ### Data Retention (Informational)
 - `personal_retention_months`: Expected retention for personal mailbox
@@ -181,6 +186,31 @@ If AdvancedSearch fails (rare, usually due to indexing issues):
 - **Sub-second to few seconds** response time for most searches
 - **Consistent performance** regardless of mailbox size
 - **Same speed for body searches as subject searches**
+
+**Parallel Search**:
+- Personal and shared mailboxes are searched simultaneously using threading
+- ~2x faster when searching multiple mailboxes
+- Proper COM initialization per thread ensures stability
+
+**Smart Connection**:
+- Connects to existing Outlook instance first (GetActiveObject) - instant connection
+- Falls back to launching new instance only if needed
+- Exponential backoff retry (1s, 2s, 4s) for resilient connection
+
+**Optimized Caching**:
+- 1-hour cache lifetime with automatic invalidation
+- Cache size limited to 100 entries with LRU eviction
+- Cache key includes search parameters for accuracy
+
+**Memory Management**:
+- COM references released after email extraction
+- Recipients list limited to 10 by default (configurable)
+- Email body truncation supported via max_body_chars
+
+**Non-Blocking Server**:
+- Uses asyncio.to_thread() for all Outlook operations
+- Server remains responsive during long searches
+- Multiple concurrent tool calls supported
 
 **`max_results` Behavior**: The `max_results` configuration sets the total maximum number of emails returned across ALL mailboxes. Results are limited early during search for efficiency.
 

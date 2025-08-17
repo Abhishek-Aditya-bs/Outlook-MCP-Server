@@ -118,8 +118,8 @@ async def handle_check_mailbox_access():
     logger.info("Checking mailbox access...")
     
     try:
-        # Check access to mailboxes
-        access_result = outlook_client.check_access()
+        # Check access to mailboxes (non-blocking)
+        access_result = await asyncio.to_thread(outlook_client.check_access)
         
         # Format response
         formatted_result = format_mailbox_status(access_result)
@@ -146,8 +146,9 @@ async def handle_get_email_chain(search_text: str, include_personal: bool, inclu
     logger.info(f"Searching for emails containing: {search_text}")
     
     try:
-        # Search for emails in both subject and body
-        emails = outlook_client.search_emails(
+        # Search for emails in both subject and body (non-blocking)
+        emails = await asyncio.to_thread(
+            outlook_client.search_emails,
             search_text=search_text,
             include_personal=include_personal, 
             include_shared=include_shared
