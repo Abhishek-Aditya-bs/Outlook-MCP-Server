@@ -89,6 +89,7 @@ class ConfigReader:
             'batch_processing_size': 50,
             'analyze_importance_levels': True,
             'search_all_folders': True,
+            'use_folder_traversal': False,
             'use_extended_mapi_login': True,
             'include_timestamps': True,
             'clean_html_content': True

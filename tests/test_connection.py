@@ -4,12 +4,13 @@ import asyncio
 import sys
 import os
 
-# Add src directory to path for imports  
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Add src directory to path for imports
+src_path = os.path.join(os.path.dirname(__file__), '..', 'src')
+sys.path.insert(0, src_path)
 
-from src.utils.outlook_client import outlook_client
-from src.config.config_reader import config
-from src.utils.email_formatter import format_mailbox_status, format_email_chain
+from utils.outlook_client import outlook_client
+from config.config_reader import config
+from utils.email_formatter import format_mailbox_status, format_email_chain
 
 
 async def test_connection():
