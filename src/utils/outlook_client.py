@@ -530,13 +530,18 @@ class OutlookClient:
             count = 0
             batch_size = config.get_int('batch_processing_size', 50)
             
+            # Get search body limit (only for pattern matching, not final extraction)
+            search_body_chars = config.get_int('max_search_body_chars', 500)
+            
             for item in items:
                 try:
                     subject = getattr(item, 'Subject', '').lower()
-                    body = getattr(item, 'Body', '').lower()[:500]  # First 500 chars for performance
+                    # Only check limited body for search performance
+                    body_preview = getattr(item, 'Body', '').lower()[:search_body_chars]
                     
                     # Check if pattern matches
-                    if pattern.lower() in subject or pattern.lower() in body:
+                    if pattern.lower() in subject or pattern.lower() in body_preview:
+                        # Extract FULL email data (not limited by search chars)
                         email_data = self._extract_email_data(item, folder_name, mailbox_type)
                         if email_data:
                             emails.append(email_data)
