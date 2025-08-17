@@ -6,6 +6,7 @@ from typing import List, Dict, Any
 import logging
 import pythoncom
 import re
+import time  # Added for AdvancedSearch polling
 
 from ..config.config_reader import config
 
@@ -156,171 +157,90 @@ class OutlookClient:
     
     def _search_mailbox_comprehensive(self, inbox_folder, search_text: str,
                                       mailbox_type: str, max_results: int) -> List[Dict[str, Any]]:
-        """Optimized search using Outlook's SQL filters for better performance."""
+        """Optimized search using AdvancedSearch for near-instant body/content matching."""
         emails = []
         found_ids = set()  # Track found emails to avoid duplicates
         
-        # Escape special characters for SQL
-        search_text_escaped = search_text.replace("'", "''").replace('"', '""')
-        
-        items = inbox_folder.Items
-        items.Sort("[ReceivedTime]", True)
-        
-        # Build optimized filters to try in order of performance
-        filters_to_try = [
-            # 1. Subject search (fastest - always indexed)
-            (f"@SQL=\"urn:schemas:httpmail:subject\" LIKE '%{search_text_escaped}%'", "subject"),
+        try:
+            # Get folder path for scope
+            scope = f"'{inbox_folder.FolderPath}'"
             
-            # 2. Try combined subject OR body with message body property
-            (f"@SQL=\"urn:schemas:httpmail:subject\" LIKE '%{search_text_escaped}%' OR "
-             f"\"http://schemas.microsoft.com/mapi/proptag/0x1000001E\" LIKE '%{search_text_escaped}%'", "subject_or_body"),
+            # Escape special characters for DASL query (double quotes need escaping)
+            search_text_escaped = search_text.replace('"', '""')
             
-            # 3. Try text description (often faster than full body)
-            (f"@SQL=\"urn:schemas:httpmail:textdescription\" LIKE '%{search_text_escaped}%'", "text_description"),
-        ]
-        
-        for filter_sql, filter_type in filters_to_try:
-            try:
-                logger.info(f"Trying {filter_type} filter for '{search_text}'")
-                filtered_items = items.Restrict(filter_sql)
-                count = filtered_items.Count
-                
-                if count > 0:
-                    logger.info(f"Found {count} potential matches using {filter_type} filter")
-                    
-                    for item in filtered_items:
-                        if len(emails) >= max_results:
-                            break
-                        
-                        try:
-                            entry_id = getattr(item, 'EntryID', '')
-                            if entry_id and entry_id not in found_ids:
-                                # For subject-only filter, verify the match
-                                if filter_type == "subject":
-                                    # Already matched in subject, just add it
-                                    email_data = self._extract_email_data(
-                                        item, inbox_folder.Name, mailbox_type
-                                    )
-                                    if email_data:
-                                        emails.append(email_data)
-                                        found_ids.add(entry_id)
-                                else:
-                                    # For body filters, verify it's actually in the content
-                                    search_lower = search_text.lower()
-                                    subject = getattr(item, 'Subject', '').lower()
-                                    body = getattr(item, 'Body', '').lower()
-                                    
-                                    if search_lower in subject or search_lower in body:
-                                        email_data = self._extract_email_data(
-                                            item, inbox_folder.Name, mailbox_type
-                                        )
-                                        if email_data:
-                                            emails.append(email_data)
-                                            found_ids.add(entry_id)
-                        except Exception as e:
-                            logger.debug(f"Error processing item: {e}")
-                            continue
-                    
-                    # If we got good results from this filter, we can stop
-                    if len(emails) >= max_results * 0.5:  # Got at least 50% of what we need
-                        logger.info(f"Got sufficient results from {filter_type} filter")
-                        break
-                        
-            except Exception as e:
-                logger.debug(f"Filter {filter_type} failed: {e}")
-                continue
-        
-        # If we still need more results and no filter worked well, fall back to date-based search
-        if len(emails) < max_results:
-            logger.info(f"Need more results, using date-based search fallback")
-            # Use smaller date ranges for faster performance
-            date_ranges = [7, 30, 90, 180]  # Simplified ranges
+            # Build DASL query for subject OR body (textdescription includes body content)
+            # Using ci_phrasematch for case-insensitive exact phrase matching
+            query = (
+                f'urn:schemas:httpmail:subject ci_phrasematch "{search_text_escaped}" OR '
+                f'urn:schemas:httpmail:textdescription ci_phrasematch "{search_text_escaped}"'
+            )
             
-            # Get max retention from config
-            max_retention_days = config.get_int(
-                f'{mailbox_type}_retention_months',
-                config.get_int('personal_retention_months', 6) if mailbox_type == 'personal' else config.get_int('shared_retention_months', 12)
-            ) * 30
+            logger.info(f"Performing AdvancedSearch in {scope} for '{search_text}'")
             
-            search_lower = search_text.lower()
-            total_checked = 0
+            # Perform advanced search (asynchronous, but we poll for completion)
+            search = self.outlook.AdvancedSearch(
+                Scope=scope,
+                Filter=query,
+                SearchSubFolders=False,  # Don't search subfolders for inbox
+                Tag="EmailBodySearch"  # Unique tag for this search
+            )
             
-            for days in date_ranges:
-                if len(emails) >= max_results:
+            # Poll for completion with timeout
+            start_time = time.time()
+            while not search.SearchComplete:
+                time.sleep(0.1)
+                if time.time() - start_time > 30:  # Timeout after 30 seconds
+                    logger.warning("AdvancedSearch timed out after 30 seconds")
                     break
+            
+            if search.SearchComplete:
+                results = search.Results
+                result_count = min(results.Count, max_results)  # Limit early
+                logger.info(f"AdvancedSearch completed: found {results.Count} matches (taking {result_count})")
                 
-                # Don't search beyond retention period
-                if days > max_retention_days:
-                    days = max_retention_days
-                
-                # Calculate date range
-                from datetime import timedelta
-                start_date = datetime.now() - timedelta(days=days)
-                end_date = datetime.now() - timedelta(days=date_ranges[date_ranges.index(days)-1] if date_ranges.index(days) > 0 else 0)
-                
-                # Build date filter for this range
-                if date_ranges.index(days) == 0:
-                    # First range: just last N days
-                    date_filter = f"[ReceivedTime] >= '{start_date.strftime('%m/%d/%Y')}'"
-                else:
-                    # Subsequent ranges: between dates to avoid re-checking
-                    date_filter = f"[ReceivedTime] >= '{start_date.strftime('%m/%d/%Y')}' AND [ReceivedTime] < '{end_date.strftime('%m/%d/%Y')}'"
-                
-                try:
-                    filtered_items = items.Restrict(date_filter)
-                    range_count = filtered_items.Count
-                    
-                    if range_count == 0:
+                for i in range(1, result_count + 1):
+                    try:
+                        item = results.Item(i)
+                        entry_id = getattr(item, 'EntryID', '')
+                        if entry_id and entry_id not in found_ids:
+                            email_data = self._extract_email_data(item, inbox_folder.Name, mailbox_type)
+                            if email_data:
+                                emails.append(email_data)
+                                found_ids.add(entry_id)
+                    except Exception as e:
+                        logger.debug(f"Error processing result {i}: {e}")
                         continue
-                    
-                    logger.info(f"Searching {range_count} emails from last {days} days")
-                    
-                    # Sort by date (newest first)
-                    filtered_items.Sort("[ReceivedTime]", True)
-                    
-                    items_checked = 0
-                    # Limit checks per range for better performance
-                    max_per_range = min(range_count, 500)  # Reduced limit for faster response
-                    
-                    for item in filtered_items:
-                        if len(emails) >= max_results or items_checked >= max_per_range:
-                            break
-                        
-                        items_checked += 1
-                        total_checked += 1
-                        
-                        try:
-                            entry_id = getattr(item, 'EntryID', '')
-                            if entry_id and entry_id not in found_ids:
-                                # Quick subject check first
-                                subject = getattr(item, 'Subject', '').lower()
-                                body = getattr(item, 'Body', '').lower()
-                                
-                                # Check if search text is in subject or body
-                                if search_lower in subject or search_lower in body:
-                                    email_data = self._extract_email_data(
-                                        item, inbox_folder.Name, mailbox_type
-                                    )
-                                    if email_data:
-                                        emails.append(email_data)
-                                        found_ids.add(entry_id)
-                        except Exception as e:
-                            logger.debug(f"Error checking email: {e}")
-                            continue
-                    
-                    logger.info(f"Checked {items_checked} items in {days}-day range, found {len(emails)} total matches")
-                    
-                    # If we found enough matches, stop searching
-                    if len(emails) >= max_results * 0.7:  # Found at least 70% of what we need
-                        logger.info(f"Found sufficient matches, stopping search")
+            else:
+                logger.warning("AdvancedSearch did not complete successfully")
+        
+        except Exception as e:
+            logger.error(f"AdvancedSearch failed: {e}")
+            logger.info("Falling back to traditional search methods")
+            
+            # Fallback to original Restrict filters if AdvancedSearch fails
+            # This ensures robustness if indexing is disabled or incomplete
+            search_text_escaped = search_text.replace("'", "''").replace('"', '""')
+            items = inbox_folder.Items
+            items.Sort("[ReceivedTime]", True)
+            
+            # Try subject search first (always fast)
+            try:
+                subject_filter = f"@SQL=\"urn:schemas:httpmail:subject\" LIKE '%{search_text_escaped}%'"
+                filtered_items = items.Restrict(subject_filter)
+                
+                for item in filtered_items:
+                    if len(emails) >= max_results:
                         break
-                        
-                except Exception as e:
-                    logger.warning(f"Date filter for {days} days failed: {e}")
-                    continue
-            
-            logger.info(f"Date-based search checked {total_checked} items total, found {len(emails)} matches")
-            
+                    
+                    entry_id = getattr(item, 'EntryID', '')
+                    if entry_id and entry_id not in found_ids:
+                        email_data = self._extract_email_data(item, inbox_folder.Name, mailbox_type)
+                        if email_data:
+                            emails.append(email_data)
+                            found_ids.add(entry_id)
+            except Exception as fallback_error:
+                logger.debug(f"Fallback subject filter failed: {fallback_error}")
+        
         # Search other folders if enabled and we need more results
         if len(emails) < max_results and config.get_bool('search_all_folders', True):
             try:
@@ -340,53 +260,53 @@ class OutlookClient:
     
     def _search_other_folders(self, store, search_text: str, mailbox_type: str, 
                              max_results: int, found_ids: set) -> List[Dict[str, Any]]:
-        """Search other folders using two-pass strategy."""
+        """Search other folders using AdvancedSearch for consistency."""
         emails = []
-        key_folders = ['Sent Items', 'Drafts']
+        key_folders = ['Sent Items', 'Drafts']  # Extend if needed
         
         for folder_name in key_folders:
             if len(emails) >= max_results:
                 break
-                
+            
             try:
                 folder = self._get_folder_by_name(store, folder_name)
                 if folder:
-                    items = folder.Items
-                    items.Sort("[ReceivedTime]", True)
+                    # Use AdvancedSearch for this folder as well
+                    scope = f"'{folder.FolderPath}'"
+                    search_text_escaped = search_text.replace('"', '""')
+                    query = (
+                        f'urn:schemas:httpmail:subject ci_phrasematch "{search_text_escaped}" OR '
+                        f'urn:schemas:httpmail:textdescription ci_phrasematch "{search_text_escaped}"'
+                    )
                     
-                    # Quick subject search first
-                    subject_filter = f"@SQL=\"urn:schemas:httpmail:subject\" LIKE '%{search_text}%'"
-                    try:
-                        filtered_items = items.Restrict(subject_filter)
-                        for item in filtered_items:
-                            if len(emails) >= max_results:
-                                break
+                    logger.info(f"AdvancedSearch in {folder_name} for '{search_text}'")
+                    
+                    search = self.outlook.AdvancedSearch(
+                        Scope=scope, 
+                        Filter=query, 
+                        SearchSubFolders=False, 
+                        Tag=f"OtherFolderSearch_{folder_name}"
+                    )
+                    
+                    # Poll with shorter timeout for secondary folders
+                    start_time = time.time()
+                    while not search.SearchComplete:
+                        time.sleep(0.1)
+                        if time.time() - start_time > 10:  # Shorter timeout for secondary folders
+                            break
+                    
+                    if search.SearchComplete:
+                        results = search.Results
+                        result_count = min(results.Count, max_results - len(emails))
+                        
+                        for i in range(1, result_count + 1):
+                            item = results.Item(i)
                             entry_id = getattr(item, 'EntryID', '')
                             if entry_id and entry_id not in found_ids:
-                                email_data = self._extract_email_data(
-                                    item, folder_name, mailbox_type
-                                )
+                                email_data = self._extract_email_data(item, folder_name, mailbox_type)
                                 if email_data:
                                     emails.append(email_data)
                                     found_ids.add(entry_id)
-                    except:
-                        # Fallback to limited iteration if filter fails
-                        count = 0
-                        search_lower = search_text.lower()
-                        for item in items:
-                            if count >= 10 or len(emails) >= max_results:
-                                break
-                            entry_id = getattr(item, 'EntryID', '')
-                            if entry_id and entry_id not in found_ids:
-                                subject = getattr(item, 'Subject', '').lower()
-                                if search_lower in subject:
-                                    email_data = self._extract_email_data(
-                                        item, folder_name, mailbox_type
-                                    )
-                                    if email_data:
-                                        emails.append(email_data)
-                                        found_ids.add(entry_id)
-                                        count += 1
             except Exception as e:
                 logger.debug(f"Error searching {folder_name}: {e}")
         
