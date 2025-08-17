@@ -93,34 +93,35 @@ class OutlookClient:
         
         return result
     
-    def search_emails_by_subject(self, subject: str, 
-                                include_personal: bool = True, 
-                                include_shared: bool = True) -> List[Dict[str, Any]]:
-        """Optimized search using Outlook's built-in filtering."""
+    def search_emails(self, search_text: str, 
+                     include_personal: bool = True, 
+                     include_shared: bool = True) -> List[Dict[str, Any]]:
+        """Search emails in both subject and body using exact phrase matching."""
         if not self.connected:
             if not self.connect():
                 return []
         
         # Check cache first
-        cache_key = f"{subject}_{include_personal}_{include_shared}"
+        cache_key = f"{search_text}_{include_personal}_{include_shared}"
         if cache_key in self._search_cache:
-            logger.info(f"Returning cached results for '{subject}'")
+            logger.info(f"Returning cached results for '{search_text}'")
             return self._search_cache[cache_key]
         
         all_emails = []
         max_results = config.get_int('max_search_results', 500)
         
-        # Use Outlook's Advanced Search or Filter
+        # Search personal mailbox
         if include_personal:
-            personal_emails = self._search_mailbox_optimized(
+            personal_emails = self._search_mailbox_comprehensive(
                 self.namespace.GetDefaultFolder(6), 
-                subject, 
+                search_text, 
                 'personal',
                 max_results
             )
             all_emails.extend(personal_emails)
             logger.info(f"Found {len(personal_emails)} emails in personal mailbox")
         
+        # Search shared mailbox
         if include_shared and config.get('shared_mailbox_email'):
             try:
                 shared_email = config.get('shared_mailbox_email')
@@ -129,9 +130,9 @@ class OutlookClient:
                 
                 if shared_recipient.Resolved:
                     shared_inbox = self.namespace.GetSharedDefaultFolder(shared_recipient, 6)
-                    shared_emails = self._search_mailbox_optimized(
+                    shared_emails = self._search_mailbox_comprehensive(
                         shared_inbox,
-                        subject,
+                        search_text,
                         'shared',
                         max_results - len(all_emails)
                     )
@@ -147,6 +148,139 @@ class OutlookClient:
         self._search_cache[cache_key] = all_emails[:max_results]
         
         return all_emails[:max_results]
+    
+    def search_emails_by_subject(self, subject: str, 
+                                include_personal: bool = True, 
+                                include_shared: bool = True) -> List[Dict[str, Any]]:
+        """Legacy method - redirects to search_emails for backward compatibility."""
+        return self.search_emails(subject, include_personal, include_shared)
+    
+    def _search_mailbox_comprehensive(self, inbox_folder, search_text: str,
+                                      mailbox_type: str, max_results: int) -> List[Dict[str, Any]]:
+        """Comprehensive search in both subject and body using exact phrase matching."""
+        emails = []
+        
+        try:
+            # Build filter to search in both subject AND body
+            # Using OR to find emails that contain the search text in either field
+            filter_str = f"@SQL=\"urn:schemas:httpmail:subject\" LIKE '%{search_text}%' OR \"urn:schemas:httpmail:textdescription\" LIKE '%{search_text}%'"
+            
+            logger.info(f"Searching {mailbox_type} mailbox for '{search_text}' in subject and body")
+            
+            # Get items from inbox
+            items = inbox_folder.Items
+            
+            # Sort by ReceivedTime descending for recent emails first
+            items.Sort("[ReceivedTime]", True)
+            
+            # Apply filter
+            try:
+                filtered_items = items.Restrict(filter_str)
+                logger.info(f"Filter found {filtered_items.Count} potential matches")
+            except:
+                # Fallback to manual search if SQL filter fails
+                logger.info("SQL filter failed, using fallback search")
+                filtered_items = self._comprehensive_fallback_search(items, search_text, max_results)
+            
+            # Process filtered results
+            count = 0
+            for item in filtered_items:
+                if count >= max_results:
+                    break
+                    
+                try:
+                    email_data = self._extract_email_data_optimized(
+                        item, 
+                        inbox_folder.Name, 
+                        mailbox_type
+                    )
+                    if email_data:
+                        emails.append(email_data)
+                        count += 1
+                except Exception as e:
+                    logger.debug(f"Error processing email: {e}")
+                    continue
+            
+            # Search other folders if enabled and we need more results
+            if count < max_results and config.get_bool('search_all_folders', True):
+                additional_emails = self._search_other_folders_comprehensive(
+                    inbox_folder.Parent,
+                    search_text,
+                    mailbox_type,
+                    max_results - count
+                )
+                emails.extend(additional_emails)
+            
+        except Exception as e:
+            logger.error(f"Error in comprehensive search: {e}")
+        
+        return emails
+    
+    def _comprehensive_fallback_search(self, items, search_text: str, max_results: int):
+        """Fallback search that checks both subject and body."""
+        results = []
+        search_lower = search_text.lower()
+        count = 0
+        
+        for item in items:
+            if count >= max_results:
+                break
+            try:
+                subject = getattr(item, 'Subject', '').lower()
+                body = getattr(item, 'Body', '').lower()
+                
+                # Check if search text exists in either subject or body
+                if search_lower in subject or search_lower in body:
+                    results.append(item)
+                    count += 1
+            except:
+                continue
+        
+        return results
+    
+    def _search_other_folders_comprehensive(self, store, search_text: str,
+                                           mailbox_type: str, max_results: int) -> List[Dict[str, Any]]:
+        """Search other folders for the search text in both subject and body."""
+        emails = []
+        
+        # Search key folders
+        key_folders = ['Sent Items', 'Drafts']
+        
+        for folder_name in key_folders:
+            if len(emails) >= max_results:
+                break
+                
+            try:
+                folder = self._get_folder_by_name(store, folder_name)
+                if folder:
+                    items = folder.Items
+                    items.Sort("[ReceivedTime]", True)
+                    
+                    # Search in folder
+                    count = 0
+                    search_lower = search_text.lower()
+                    
+                    for item in items:
+                        if count >= 10:  # Limit per folder
+                            break
+                        try:
+                            subject = getattr(item, 'Subject', '').lower()
+                            body = getattr(item, 'Body', '').lower()
+                            
+                            # Check both subject and body
+                            if search_lower in subject or search_lower in body:
+                                email_data = self._extract_email_data_optimized(
+                                    item, folder_name, mailbox_type
+                                )
+                                if email_data:
+                                    emails.append(email_data)
+                                    count += 1
+                        except:
+                            continue
+            except Exception as e:
+                logger.debug(f"Error searching {folder_name}: {e}")
+        
+        return emails
     
     def _search_mailbox_optimized(self, inbox_folder, subject_pattern: str, 
                                   mailbox_type: str, max_results: int) -> List[Dict[str, Any]]:
@@ -313,12 +447,6 @@ class OutlookClient:
         except Exception as e:
             logger.error(f"Error extracting email data: {e}")
             return None
-    
-    def search_alerts(self, alert_pattern: str,
-                     include_personal: bool = True, 
-                     include_shared: bool = True) -> List[Dict[str, Any]]:
-        """Search for alerts - uses same optimized method."""
-        return self.search_emails_by_subject(alert_pattern, include_personal, include_shared)
     
     def _get_store_display_name(self, folder) -> str:
         """Safely get store display name from a folder."""

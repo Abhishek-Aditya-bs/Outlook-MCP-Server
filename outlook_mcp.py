@@ -23,7 +23,7 @@ from mcp.server.stdio import stdio_server
 try:
     from src.config.config_reader import config
     from src.utils.outlook_client import outlook_client
-    from src.utils.email_formatter import format_mailbox_status, format_email_chain, format_alert_analysis
+    from src.utils.email_formatter import format_mailbox_status, format_email_chain
 except ImportError as e:
     print(f"[ERROR] Import Error: {e}")
     print("\n[INFO] Please install required dependencies:")
@@ -54,13 +54,13 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="get_email_chain",
-            description="Retrieves complete email chains with full email bodies for summarization. Searches ALL folders in both personal and shared mailboxes. Returns full email content including sender, recipients, timestamps, and complete message bodies for AI to analyze and summarize the conversation thread.",
+            description="Searches for emails containing the specified text in BOTH subject and body using exact phrase matching. Retrieves complete email chains with full email bodies for comprehensive analysis. Searches ALL folders in both personal and shared mailboxes. Returns full email content including sender, recipients, timestamps, and complete message bodies. Use specific search terms (error codes, alert identifiers, unique phrases) for best results.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "subject": {
+                    "search_text": {
                         "type": "string",
-                        "description": "Subject pattern to search for in email chains"
+                        "description": "Exact text pattern to search for in email subject and body. The search looks for this exact phrase."
                     },
                     "include_personal": {
                         "type": "boolean",
@@ -73,31 +73,7 @@ async def list_tools() -> list[types.Tool]:
                         "default": True
                     }
                 },
-                "required": ["subject"]
-            }
-        ),
-        types.Tool(
-            name="analyze_alerts",
-            description="Analyzes production alerts with full email content for comprehensive understanding. Retrieves complete alert emails including bodies, analyzes patterns, identifies previous responses and resolutions, and provides actionable recommendations based on historical alert handling. Returns full context for accurate alert analysis.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "alert_pattern": {
-                        "type": "string",
-                        "description": "Alert pattern, error message, or identifier to analyze"
-                    },
-                    "include_personal": {
-                        "type": "boolean",
-                        "description": "Search personal mailbox (default: true)",
-                        "default": True
-                    },
-                    "include_shared": {
-                        "type": "boolean",
-                        "description": "Search shared mailbox (default: true)", 
-                        "default": True
-                    }
-                },
-                "required": ["alert_pattern"]
+                "required": ["search_text"]
             }
         )
     ]
@@ -114,24 +90,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[types.Text
             return await handle_check_mailbox_access()
             
         elif name == "get_email_chain":
-            subject = arguments.get("subject")
-            if not subject:
-                raise ValueError("Subject parameter is required")
+            search_text = arguments.get("search_text")
+            if not search_text:
+                raise ValueError("search_text parameter is required")
             
             include_personal = arguments.get("include_personal", True)
             include_shared = arguments.get("include_shared", True)
             
-            return await handle_get_email_chain(subject, include_personal, include_shared)
-            
-        elif name == "analyze_alerts":
-            alert_pattern = arguments.get("alert_pattern")
-            if not alert_pattern:
-                raise ValueError("Alert pattern parameter is required")
-            
-            include_personal = arguments.get("include_personal", True)
-            include_shared = arguments.get("include_shared", True)
-            
-            return await handle_analyze_alerts(alert_pattern, include_personal, include_shared)
+            return await handle_get_email_chain(search_text, include_personal, include_shared)
             
         else:
             raise ValueError(f"Unknown tool: {name}")
@@ -175,67 +141,34 @@ async def handle_check_mailbox_access():
         return [types.TextContent(type="text", text=str(error_response))]
 
 
-async def handle_get_email_chain(subject: str, include_personal: bool, include_shared: bool):
-    """Handle email chain retrieval."""
-    logger.info(f"Searching for email chain: {subject}")
+async def handle_get_email_chain(search_text: str, include_personal: bool, include_shared: bool):
+    """Handle email search and retrieval."""
+    logger.info(f"Searching for emails containing: {search_text}")
     
     try:
-        # Search for emails
-        emails = outlook_client.search_emails_by_subject(
-            subject=subject,
+        # Search for emails in both subject and body
+        emails = outlook_client.search_emails(
+            search_text=search_text,
             include_personal=include_personal, 
             include_shared=include_shared
         )
         
         # Format response
-        formatted_result = format_email_chain(emails, subject)
+        formatted_result = format_email_chain(emails, search_text)
         
-        logger.info(f"Found {len(emails)} emails for subject: {subject}")
+        logger.info(f"Found {len(emails)} emails containing '{search_text}'")
         return [types.TextContent(type="text", text=str(formatted_result))]
         
     except Exception as e:
-        logger.error(f"Error retrieving email chain: {e}")
+        logger.error(f"Error searching emails: {e}")
         error_response = {
             "status": "error", 
-            "search_subject": subject,
-            "message": f"Could not retrieve email chain: {str(e)}",
+            "search_text": search_text,
+            "message": f"Could not search emails: {str(e)}",
             "troubleshooting": [
                 "Verify Outlook connection", 
-                "Check subject pattern spelling",
+                "Use specific search terms for best results",
                 "Ensure mailboxes are accessible"
-            ]
-        }
-        return [types.TextContent(type="text", text=str(error_response))]
-
-
-async def handle_analyze_alerts(alert_pattern: str, include_personal: bool, include_shared: bool):
-    """Handle alert analysis."""
-    logger.info(f"Analyzing alerts for pattern: {alert_pattern}")
-    
-    try:
-        # Search for alerts
-        alerts = outlook_client.search_alerts(
-            alert_pattern=alert_pattern,
-            include_personal=include_personal,
-            include_shared=include_shared
-        )
-        
-        # Format response  
-        formatted_result = format_alert_analysis(alerts, alert_pattern)
-        
-        logger.info(f"Found {len(alerts)} alerts for pattern: {alert_pattern}")
-        return [types.TextContent(type="text", text=str(formatted_result))]
-        
-    except Exception as e:
-        logger.error(f"Error analyzing alerts: {e}")
-        error_response = {
-            "status": "error",
-            "search_pattern": alert_pattern, 
-            "message": f"Could not analyze alerts: {str(e)}",
-            "troubleshooting": [
-                "Verify Outlook connection",
-                "Check alert pattern spelling", 
-                "Ensure shared mailbox is configured"
             ]
         }
         return [types.TextContent(type="text", text=str(error_response))]
@@ -287,8 +220,7 @@ async def main():
     
     print("\n[TOOLS] Available Tools:")
     print("   1. check_mailbox_access - Test connection and access")
-    print("   2. get_email_chain - Find email conversations by subject")
-    print("   3. analyze_alerts - Analyze production alerts and patterns")
+    print("   2. get_email_chain - Search emails by text in subject AND body")
     
     print(f"\n[READY] Server ready! Listening for MCP client connections...")
     print("=" * 60)
