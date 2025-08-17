@@ -157,62 +157,92 @@ class OutlookClient:
     
     def _search_mailbox_comprehensive(self, inbox_folder, search_text: str,
                                       mailbox_type: str, max_results: int) -> List[Dict[str, Any]]:
-        """Comprehensive search in both subject and body using exact phrase matching."""
+        """Two-pass search strategy: first subject (fast), then body if needed."""
         emails = []
+        found_ids = set()  # Track found emails to avoid duplicates
         
         try:
-            # Build filter to search in both subject AND body
-            # Using OR to find emails that contain the search text in either field
-            filter_str = f"@SQL=\"urn:schemas:httpmail:subject\" LIKE '%{search_text}%' OR \"urn:schemas:httpmail:textdescription\" LIKE '%{search_text}%'"
+            # PASS 1: Search in SUBJECT first (fastest)
+            subject_filter = f"@SQL=\"urn:schemas:httpmail:subject\" LIKE '%{search_text}%'"
+            logger.info(f"Pass 1: Searching {mailbox_type} mailbox subjects for '{search_text}'")
             
-            logger.info(f"Searching {mailbox_type} mailbox for '{search_text}' in subject and body")
-            
-            # Get items from inbox
             items = inbox_folder.Items
-            
-            # Sort by ReceivedTime descending for recent emails first
             items.Sort("[ReceivedTime]", True)
             
-            # Apply filter
+            # Search subjects
             try:
-                filtered_items = items.Restrict(filter_str)
-                logger.info(f"Filter found {filtered_items.Count} potential matches")
-            except:
-                # Fallback to manual search if SQL filter fails
-                logger.info("SQL filter failed, using fallback search")
-                filtered_items = self._comprehensive_fallback_search(items, search_text, max_results)
+                subject_items = items.Restrict(subject_filter)
+                logger.info(f"Found {subject_items.Count} matches in subjects")
+                
+                # Process subject matches
+                for item in subject_items:
+                    if len(emails) >= max_results:
+                        break
+                    try:
+                        entry_id = getattr(item, 'EntryID', '')
+                        if entry_id and entry_id not in found_ids:
+                            email_data = self._extract_email_data(
+                                item, inbox_folder.Name, mailbox_type
+                            )
+                            if email_data:
+                                emails.append(email_data)
+                                found_ids.add(entry_id)
+                    except Exception as e:
+                        logger.debug(f"Error processing email: {e}")
+                        continue
+                        
+            except Exception as e:
+                logger.warning(f"Subject search failed: {e}")
             
-            # Process filtered results
-            count = 0
-            for item in filtered_items:
-                if count >= max_results:
-                    break
+            # PASS 2: Search in BODY if we need more results
+            if len(emails) < max_results:
+                logger.info(f"Pass 2: Searching email bodies for additional matches")
+                
+                # For body search, we need to iterate (slower but necessary)
+                # Limit iteration to recent emails for performance
+                search_lower = search_text.lower()
+                items_checked = 0
+                max_items_to_check = min(1000, max_results * 10)  # Limit iterations
+                
+                for item in items:
+                    if len(emails) >= max_results or items_checked >= max_items_to_check:
+                        break
                     
-                try:
-                    email_data = self._extract_email_data_optimized(
-                        item, 
-                        inbox_folder.Name, 
-                        mailbox_type
-                    )
-                    if email_data:
-                        emails.append(email_data)
-                        count += 1
-                except Exception as e:
-                    logger.debug(f"Error processing email: {e}")
-                    continue
+                    items_checked += 1
+                    
+                    try:
+                        entry_id = getattr(item, 'EntryID', '')
+                        if entry_id and entry_id not in found_ids:
+                            # Quick subject check first (already in memory)
+                            subject = getattr(item, 'Subject', '').lower()
+                            if search_lower not in subject:  # Only check body if not in subject
+                                body = getattr(item, 'Body', '').lower()
+                                if search_lower in body:
+                                    email_data = self._extract_email_data(
+                                        item, inbox_folder.Name, mailbox_type
+                                    )
+                                    if email_data:
+                                        emails.append(email_data)
+                                        found_ids.add(entry_id)
+                    except Exception as e:
+                        logger.debug(f"Error checking email body: {e}")
+                        continue
+                
+                logger.info(f"Checked {items_checked} items for body matches, found {len(emails)} total")
             
             # Search other folders if enabled and we need more results
-            if count < max_results and config.get_bool('search_all_folders', True):
-                additional_emails = self._search_other_folders_comprehensive(
+            if len(emails) < max_results and config.get_bool('search_all_folders', True):
+                additional_emails = self._search_other_folders(
                     inbox_folder.Parent,
                     search_text,
                     mailbox_type,
-                    max_results - count
+                    max_results - len(emails),
+                    found_ids
                 )
                 emails.extend(additional_emails)
             
         except Exception as e:
-            logger.error(f"Error in comprehensive search: {e}")
+            logger.error(f"Error in search: {e}")
         
         return emails
     
@@ -238,12 +268,10 @@ class OutlookClient:
         
         return results
     
-    def _search_other_folders_comprehensive(self, store, search_text: str,
-                                           mailbox_type: str, max_results: int) -> List[Dict[str, Any]]:
-        """Search other folders for the search text in both subject and body."""
+    def _search_other_folders(self, store, search_text: str, mailbox_type: str, 
+                             max_results: int, found_ids: set) -> List[Dict[str, Any]]:
+        """Search other folders using two-pass strategy."""
         emails = []
-        
-        # Search key folders
         key_folders = ['Sent Items', 'Drafts']
         
         for folder_name in key_folders:
@@ -256,157 +284,46 @@ class OutlookClient:
                     items = folder.Items
                     items.Sort("[ReceivedTime]", True)
                     
-                    # Search in folder
-                    count = 0
-                    search_lower = search_text.lower()
-                    
-                    for item in items:
-                        if count >= 10:  # Limit per folder
-                            break
-                        try:
-                            subject = getattr(item, 'Subject', '').lower()
-                            body = getattr(item, 'Body', '').lower()
-                            
-                            # Check both subject and body
-                            if search_lower in subject or search_lower in body:
-                                email_data = self._extract_email_data_optimized(
+                    # Quick subject search first
+                    subject_filter = f"@SQL=\"urn:schemas:httpmail:subject\" LIKE '%{search_text}%'"
+                    try:
+                        filtered_items = items.Restrict(subject_filter)
+                        for item in filtered_items:
+                            if len(emails) >= max_results:
+                                break
+                            entry_id = getattr(item, 'EntryID', '')
+                            if entry_id and entry_id not in found_ids:
+                                email_data = self._extract_email_data(
                                     item, folder_name, mailbox_type
                                 )
                                 if email_data:
                                     emails.append(email_data)
-                                    count += 1
-                        except:
-                            continue
+                                    found_ids.add(entry_id)
+                    except:
+                        # Fallback to limited iteration if filter fails
+                        count = 0
+                        search_lower = search_text.lower()
+                        for item in items:
+                            if count >= 10 or len(emails) >= max_results:
+                                break
+                            entry_id = getattr(item, 'EntryID', '')
+                            if entry_id and entry_id not in found_ids:
+                                subject = getattr(item, 'Subject', '').lower()
+                                if search_lower in subject:
+                                    email_data = self._extract_email_data(
+                                        item, folder_name, mailbox_type
+                                    )
+                                    if email_data:
+                                        emails.append(email_data)
+                                        found_ids.add(entry_id)
+                                        count += 1
             except Exception as e:
                 logger.debug(f"Error searching {folder_name}: {e}")
         
         return emails
     
-    def _search_mailbox_optimized(self, inbox_folder, subject_pattern: str, 
-                                  mailbox_type: str, max_results: int) -> List[Dict[str, Any]]:
-        """Optimized search using Outlook's Restrict method."""
-        emails = []
-        
-        try:
-            # Build filter string for Outlook
-            # Use Subject filter which is much faster than iterating
-            filter_str = f"@SQL=\"urn:schemas:httpmail:subject\" LIKE '%{subject_pattern}%'"
-            
-            # Alternative simpler filter (if SQL doesn't work)
-            # filter_str = f"[Subject] = '{subject_pattern}'"
-            
-            logger.info(f"Searching {mailbox_type} mailbox with filter: {filter_str}")
-            
-            # Get items from inbox
-            items = inbox_folder.Items
-            
-            # Sort by ReceivedTime descending for recent emails first
-            items.Sort("[ReceivedTime]", True)
-            
-            # Apply filter - this is MUCH faster than iterating
-            try:
-                filtered_items = items.Restrict(filter_str)
-                logger.info(f"Filter found {filtered_items.Count} potential matches")
-            except:
-                # Fallback to simpler search if SQL filter fails
-                logger.info("SQL filter failed, trying simple search")
-                filtered_items = self._simple_search(items, subject_pattern, max_results)
-            
-            # Process filtered results
-            count = 0
-            for item in filtered_items:
-                if count >= max_results:
-                    break
-                    
-                try:
-                    email_data = self._extract_email_data_optimized(
-                        item, 
-                        inbox_folder.Name, 
-                        mailbox_type
-                    )
-                    if email_data:
-                        emails.append(email_data)
-                        count += 1
-                except Exception as e:
-                    logger.debug(f"Error processing email: {e}")
-                    continue
-            
-            # If we need more results and search_all_folders is enabled
-            if count < max_results and config.get_bool('search_all_folders', True):
-                # Search other folders
-                additional_emails = self._search_other_folders_optimized(
-                    inbox_folder.Parent,
-                    subject_pattern,
-                    mailbox_type,
-                    max_results - count
-                )
-                emails.extend(additional_emails)
-            
-        except Exception as e:
-            logger.error(f"Error in optimized search: {e}")
-        
-        return emails
-    
-    def _simple_search(self, items, pattern: str, max_results: int):
-        """Simple fallback search method."""
-        results = []
-        pattern_lower = pattern.lower()
-        count = 0
-        
-        for item in items:
-            if count >= max_results:
-                break
-            try:
-                subject = getattr(item, 'Subject', '').lower()
-                if pattern_lower in subject:
-                    results.append(item)
-                    count += 1
-            except:
-                continue
-        
-        return results
-    
-    def _search_other_folders_optimized(self, store, subject_pattern: str, 
-                                       mailbox_type: str, max_results: int) -> List[Dict[str, Any]]:
-        """Search other folders if needed - optimized version."""
-        emails = []
-        
-        # Only search key folders
-        key_folders = ['Sent Items', 'Drafts']
-        
-        for folder_name in key_folders:
-            if len(emails) >= max_results:
-                break
-                
-            try:
-                folder = self._get_folder_by_name(store, folder_name)
-                if folder:
-                    items = folder.Items
-                    items.Sort("[ReceivedTime]", True)
-                    
-                    # Quick search in folder
-                    count = 0
-                    for item in items:
-                        if count >= 10:  # Limit per folder
-                            break
-                        try:
-                            subject = getattr(item, 'Subject', '').lower()
-                            if subject_pattern.lower() in subject:
-                                email_data = self._extract_email_data_optimized(
-                                    item, folder_name, mailbox_type
-                                )
-                                if email_data:
-                                    emails.append(email_data)
-                                    count += 1
-                        except:
-                            continue
-            except Exception as e:
-                logger.debug(f"Error searching {folder_name}: {e}")
-        
-        return emails
-    
-    def _extract_email_data_optimized(self, item, folder_name: str, 
-                                     mailbox_type: str) -> Dict[str, Any]:
+    def _extract_email_data(self, item, folder_name: str, 
+                           mailbox_type: str) -> Dict[str, Any]:
         """Extract complete email data including full body."""
         try:
             # Get the full email body
