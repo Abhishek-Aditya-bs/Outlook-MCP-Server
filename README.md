@@ -30,7 +30,7 @@ A Model Context Protocol (MCP) server that provides programmatic access to Micro
 
 1. **Clone the repository**:
 ```bash
-git clone https://github.com/yourusername/outlook-mcp-server.git
+git clone <repository-url>
 cd outlook-mcp-server
 ```
 
